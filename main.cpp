@@ -1,48 +1,85 @@
 #include <windows.h>
 #include <iostream>
 #include <string>
-#include "service.h"
+#include "service_name.h"
+#include "mqtt_client.h"
+#include "config.h"
+#include "log.h"
+#include "volume_control.h"
 
-const char* SERVICE_NAME = "WinMqttService";
+static bool running = false;
+static SERVICE_STATUS ServiceStatus = { 0 };
+static SERVICE_STATUS_HANDLE hStatus = NULL;
 
-bool installService(const std::string& path)
+DWORD WINAPI ServiceWorkerThread(LPVOID)
 {
-	SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
-	if (!scm) return false;
+	running = true;
 
-	SC_HANDLE service = CreateServiceA(
-		scm, SERVICE_NAME, SERVICE_NAME,
-		SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
-		SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
-		path.c_str(), NULL, NULL, NULL, NULL, NULL);
+	log("Service thread started");
 
-	if (!service)
+	std::string broker = Config::getInstance().mqtt_broker;
+	std::string topic = Config::getInstance().mqtt_topic;
+
+	MqttClient mqtt(broker, SERVICE_NAME, topic,
+		[](const std::string& topic, const std::string& payload) {
+			log("Received MQTT message: " + topic + " -> " + payload);
+			muteAudio(!isAudioMuted());
+		});
+
+	mqtt.start();
+
+	while (running)
 	{
-		CloseServiceHandle(scm);
-		return false;
+		std::this_thread::sleep_for(std::chrono::seconds(1));
 	}
 
-	CloseServiceHandle(service);
-	CloseServiceHandle(scm);
-	return true;
+	mqtt.stop();
+
+	log("Service thread exiting");
+	return 0;
 }
 
-bool uninstallService()
+void WINAPI ServiceCtrlHandler(DWORD ctrlCode)
 {
-	SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
-	if (!scm) return false;
-
-	SC_HANDLE service = OpenServiceA(scm, SERVICE_NAME, DELETE);
-	if (!service)
+	switch (ctrlCode)
 	{
-		CloseServiceHandle(scm);
-		return false;
-	}
+	case SERVICE_CONTROL_STOP:
+	case SERVICE_CONTROL_SHUTDOWN:
+		log("Service stop requested");
 
-	bool ok = DeleteService(service);
-	CloseServiceHandle(service);
-	CloseServiceHandle(scm);
-	return ok;
+		ServiceStatus.dwCurrentState = SERVICE_STOP_PENDING;
+		SetServiceStatus(hStatus, &ServiceStatus);
+
+		running = false;
+
+		ServiceStatus.dwCurrentState = SERVICE_STOPPED;
+		SetServiceStatus(hStatus, &ServiceStatus);
+
+		log("Service stopped");
+		break;
+
+	default:
+		break;
+	}
+}
+
+void WINAPI ServiceMain(DWORD, LPSTR*)
+{
+	hStatus = RegisterServiceCtrlHandlerA(SERVICE_NAME, ServiceCtrlHandler);
+	if (!hStatus)
+		return;
+
+	ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+	ServiceStatus.dwCurrentState = SERVICE_START_PENDING;
+	SetServiceStatus(hStatus, &ServiceStatus);
+
+	CreateThread(NULL, 0, ServiceWorkerThread, NULL, 0, NULL);
+
+	ServiceStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
+	ServiceStatus.dwCurrentState = SERVICE_RUNNING;
+	SetServiceStatus(hStatus, &ServiceStatus);
+
+	log("Service started");
 }
 
 void runConsoleMode()
@@ -64,26 +101,7 @@ void runConsoleMode()
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR cmdLine, int)
 {
-
-	std::string args = GetCommandLineA();
-	if (args.find("install") != std::string::npos)
-	{
-		char path[MAX_PATH];
-		GetModuleFileNameA(NULL, path, MAX_PATH);
-		if (installService(path))
-			MessageBoxA(NULL, "Service installed successfully", SERVICE_NAME, MB_OK);
-		else
-			MessageBoxA(NULL, "Failed to install service", SERVICE_NAME, MB_ICONERROR);
-		return 0;
-	}
-	else if (args.find("uninstall") != std::string::npos)
-	{
-		if (uninstallService())
-			MessageBoxA(NULL, "Service removed successfully", SERVICE_NAME, MB_OK);
-		else
-			MessageBoxA(NULL, "Failed to remove service", SERVICE_NAME, MB_ICONERROR);
-		return 0;
-	}
+	Config::getInstance().load();
 
 	SERVICE_TABLE_ENTRYA ServiceTable[] =
 	{
