@@ -1,12 +1,11 @@
 #include "config.h"
 #include "log.h"
-#include "get_program_data_path.h"
-#include "service_name.h"
 #include <fstream>
 #include "nlohmann/json.hpp"
+#include <windows.h>
+#include <shlobj.h>
 
 using json = nlohmann::json;
-namespace fs = std::filesystem;
 
 Config& Config::getInstance()
 {
@@ -14,15 +13,32 @@ Config& Config::getInstance()
 	return instance;
 }
 
-void Config::load()
+void Config::load(const std::filesystem::path& path)
 {
-	auto configPath = getProgramDataPath() / SERVICE_NAME / "config.json";
+	std::ifstream f(path);
+	if (!f.is_open()) {
+		log("Config: cannot open file " + path.string());
+		return;
+	}
 
-	std::ifstream f(configPath);
+	try {
+		json j;
+		f >> j;
 
-	json j;
-	f >> j;
+		if (j.contains("mqtt")) {
+			auto& m = j["mqtt"];
+			mqttServer = m.value("server", "tcp://localhost:1883");
+			mqttUsername = m.value("username", "");
+			mqttPassword = m.value("password", "");
+			mqttTopic = m.value("topic", "homeassistant/pc/#");
+		}
+		else {
+			log("Config: missing 'mqtt' section");
+		}
 
-	mqtt_topic = j.at("mqtt_topic").get<std::string>();
-	mqtt_broker = j.at("mqtt_broker").get<std::string>();
+		log("Config loaded successfully: " + mqttServer);
+	}
+	catch (const std::exception& e) {
+		log(std::string("Config parse error: ") + e.what());
+	}
 }

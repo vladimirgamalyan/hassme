@@ -2,19 +2,22 @@
 #include <string>
 #include <filesystem>
 
-class Config {
+class Config
+{
 public:
-	std::string mqtt_topic;   // Топик MQTT
-	std::string mqtt_broker;  // Адрес брокера MQTT
+	std::string mqttServer;
+	std::string mqttUsername;
+	std::string mqttPassword;
+	std::string mqttTopic;
 
-	// Загрузка конфигурации из стандартного пути
-	void load();
+	// Загрузить конфигурацию из файла
+	void load(const std::filesystem::path& path);
 
-	// Получить единственный экземпляр
+	// Глобальный доступ (Singleton)
 	static Config& getInstance();
 
 private:
-	Config() = default;                       // Закрытый конструктор
-	Config(const Config&) = delete;           // Без копирования
-	Config& operator=(const Config&) = delete; // Без присваивания
+	Config() = default;
+	Config(const Config&) = delete;
+	Config& operator=(const Config&) = delete;
 };

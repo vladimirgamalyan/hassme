@@ -57,32 +57,3 @@ bool isAudioMuted()
 	CoUninitialize();
 	return muted;
 }
-
-// Устанавливает громкость (0.0f – 1.0f)
-void setVolume(float level)
-{
-	CoInitialize(NULL);
-	IAudioEndpointVolume* pVolume = getEndpointVolume();
-	if (pVolume) {
-		// clamp значения
-		if (level < 0.0f) level = 0.0f;
-		if (level > 1.0f) level = 1.0f;
-		pVolume->SetMasterVolumeLevelScalar(level, NULL);
-		pVolume->Release();
-	}
-	CoUninitialize();
-}
-
-// Получает текущую громкость
-float getVolume()
-{
-	float vol = 0.0f;
-	CoInitialize(NULL);
-	IAudioEndpointVolume* pVolume = getEndpointVolume();
-	if (pVolume) {
-		pVolume->GetMasterVolumeLevelScalar(&vol);
-		pVolume->Release();
-	}
-	CoUninitialize();
-	return vol;
-}

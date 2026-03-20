@@ -6,6 +6,7 @@
 #include "config.h"
 #include "log.h"
 #include "volume_control.h"
+#include "get_program_data_path.h"
 
 static bool running = false;
 static SERVICE_STATUS ServiceStatus = { 0 };
@@ -17,14 +18,21 @@ DWORD WINAPI ServiceWorkerThread(LPVOID)
 
 	log("Service thread started");
 
-	std::string broker = Config::getInstance().mqtt_broker;
-	std::string topic = Config::getInstance().mqtt_topic;
+	auto& cfg = Config::getInstance();
 
-	MqttClient mqtt(broker, SERVICE_NAME, topic,
+	MqttClient mqtt(cfg.mqttServer, SERVICE_NAME, cfg.mqttTopic,
+		cfg.mqttUsername, cfg.mqttPassword,
+
 		[](const std::string& topic, const std::string& payload) {
-			log("Received MQTT message: " + topic + " -> " + payload);
-			muteAudio(!isAudioMuted());
-		});
+			auto p = payload;
+			std::transform(p.begin(), p.end(), p.begin(), ::tolower);
+			if (topic == "homeassistant/pc/mute") {
+				if (p == "toggle") muteAudio(!isAudioMuted());
+				else if (p == "1" || p == "on" || p == "true")  muteAudio(true);
+				else if (p == "0" || p == "off" || p == "false") muteAudio(false);
+			}
+		}
+	);
 
 	mqtt.start();
 
@@ -101,7 +109,8 @@ void runConsoleMode()
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR cmdLine, int)
 {
-	Config::getInstance().load();
+	auto configPath = getProgramDataPath() / SERVICE_NAME / "config.json";
+	Config::getInstance().load(configPath);
 
 	SERVICE_TABLE_ENTRYA ServiceTable[] =
 	{
