@@ -8,13 +8,21 @@ using namespace std::chrono_literals;
 MqttClient::MqttClient(const std::string& serverUri,
 	const std::string& clientId,
 	const std::string& topic,
+	const std::string& username,
+	const std::string& password,
 	MessageHandler onMessage)
-	: serverUri_(serverUri), clientId_(clientId), topic_(topic), onMessage_(onMessage)
+	: serverUri_(serverUri),
+	clientId_(clientId),
+	topic_(topic),
+	username_(username),
+	password_(password),
+	onMessage_(onMessage)
 {
 }
 
 void MqttClient::start()
 {
+	if (running_) return;
 	running_ = true;
 	thread_ = std::thread(&MqttClient::runLoop, this);
 }
@@ -26,55 +34,70 @@ void MqttClient::stop()
 		thread_.join();
 }
 
+void MqttClient::publish(const std::string& topic, const std::string& payload, int qos, bool retained)
+{
+	std::lock_guard<std::mutex> lock(clientMutex_);
+	if (client_ && client_->is_connected()) {
+		try {
+			auto msg = mqtt::make_message(topic, payload);
+			msg->set_qos(qos);
+			msg->set_retained(retained);
+			client_->publish(msg);
+		}
+		catch (const mqtt::exception& e) {
+			log(std::string("MQTT publish failed: ") + e.what());
+		}
+	}
+	else {
+		log("MQTT publish skipped (not connected)");
+	}
+}
+
 void MqttClient::runLoop()
 {
-	mqtt::async_client client(serverUri_, clientId_);
+	client_ = std::make_shared<mqtt::async_client>(serverUri_, clientId_);
 	mqtt::connect_options connOpts;
 	connOpts.set_clean_session(true);
-	connOpts.set_user_name("Moskito");
-	connOpts.set_password("supEROass42!2");
+	if (!username_.empty())
+		connOpts.set_user_name(username_);
+	if (!password_.empty())
+		connOpts.set_password(password_);
 
-	// Обработка сообщений
-	client.set_message_callback([this](mqtt::const_message_ptr msg) {
+	client_->set_message_callback([this](mqtt::const_message_ptr msg) {
 		if (onMessage_) {
 			onMessage_(msg->get_topic(), msg->to_string());
 		}
 		});
 
-	while (running_)
-	{
+	while (running_) {
 		try {
-			if (!client.is_connected()) 
-			{
+			if (!client_->is_connected()) {
 				log("Connecting to MQTT broker: " + serverUri_);
-				client.connect(connOpts)->wait();
+				client_->connect(connOpts)->wait();
 				log("Connected to broker, subscribing to " + topic_);
-
-				client.subscribe(topic_, 1)->wait();
+				client_->subscribe(topic_, 1)->wait();
 				log("Subscribed successfully");
 			}
-
-			// Периодический опрос состояния
 			std::this_thread::sleep_for(1s);
 		}
-		catch (const mqtt::exception& e) 
-		{
+		catch (const mqtt::exception& e) {
 			log(std::string("MQTT error: ") + e.what());
-			try { client.disconnect()->wait(); }
+			try { client_->disconnect()->wait(); }
 			catch (...) {}
 			log("Reconnecting in 5 seconds...");
 			std::this_thread::sleep_for(5s);
 		}
 	}
 
-	// При завершении
 	try {
-		if (client.is_connected()) {
+		if (client_->is_connected()) {
 			log("Disconnecting from broker...");
-			client.unsubscribe(topic_)->wait();
-			client.disconnect()->wait();
+			client_->unsubscribe(topic_)->wait();
+			client_->disconnect()->wait();
 		}
 	}
 	catch (...) {}
+
+	client_.reset();
 	log("MQTT loop exited");
 }
